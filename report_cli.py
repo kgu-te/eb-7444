@@ -1,0 +1,312 @@
+import argparse
+from cmd import Cmd
+import copy
+import json
+import os
+import requests
+from typing import Callable
+
+
+class ArgParser:
+    def __init__(self):
+        parser = argparse.ArgumentParser(description='ThousandEyes Reports Helper')
+        parser.add_argument('-u', '--username', metavar='username', type=str, help='your username',
+                            default=os.environ.get('THOUSANDEYES_USERNAME'))
+        parser.add_argument('-t', '--token', metavar='API token', type=str, help='your API token',
+                            default=os.environ.get('THOUSANDEYES_API_TOKEN'))
+
+        args = parser.parse_args()
+        self.username = args.username
+        self.token = args.token
+
+        if not self.username or not self.username.strip():
+            print(F'Erroneous username: {self.username}')
+            exit(2)
+
+        if not self.token or not self.token.strip():
+            print(F'Erroneous token: {self.token}')
+            exit(2)
+
+
+class ReportParser:
+    def __init__(self):
+        self.PERSISTENT_FILTERS = {'Connection', 'Platform'}
+        self.filter_code_to_name_map = {
+            'ea': 'Endpoint Agents',
+            'eal': 'Endpoint Agent Labels',
+            'loc': 'Location',
+            'pn': 'Private Network',
+            'net': 'Network',
+            'mn': 'Monitored Network'
+        }
+
+    def get_template_report(self, raw_report: dict) -> dict:
+        report = copy.deepcopy(raw_report)
+        for w in report['widgets']:
+            if 'numberCards' in w:
+                for c in w['numberCards']:
+                    c['filters'] = {k: v if k in self.PERSISTENT_FILTERS else [] for k, v in
+                                    c['filters'].items()}
+            elif 'filters' in w:
+                w['filters'] = {k: v if k in self.PERSISTENT_FILTERS else [] for k, v in
+                                w['filters'].items()}
+        return report
+
+    def change_filter_value(self, raw_report: dict, filter_code: str, new_filter_values: list) -> dict:
+        if filter_code not in self.filter_code_to_name_map:
+            print(F'The filter code {filter_code} is not supported\n')
+            return raw_report
+
+        filter_name = self.filter_code_to_name_map[filter_code]
+
+        report = copy.deepcopy(raw_report)
+        for w in report['widgets']:
+            if 'numberCards' in w:
+                for c in w['numberCards']:
+                    c['filters'] = {k: new_filter_values if k == filter_name else v for k, v in
+                                    c['filters'].items()}
+            elif 'filters' in w:
+                w['filters'] = {k: new_filter_values if k == filter_name else v for k, v in
+                                w['filters'].items()}
+        return report
+
+    def add_filter_value(self, raw_report: dict, filter_code: str, new_filter_values: list) -> dict:
+        if filter_code not in self.filter_code_to_name_map:
+            print(F'The filter code {filter_code} is not supported\n')
+            return raw_report
+
+        filter_name = self.filter_code_to_name_map[filter_code]
+
+        report = copy.deepcopy(raw_report)
+        for w in report['widgets']:
+            if 'numberCards' in w:
+                for c in w['numberCards']:
+                    c['filters'][filter_name] = new_filter_values
+            elif 'filters' in w:
+                w['filters'][filter_name] = new_filter_values
+        return report
+
+
+class ReportCli(Cmd):
+    intro = 'You are authorised! Type ? for help :P\nIMPORTANT: Check the documentation of each command before use!!\n'
+    prompt = '> '
+    INVALID_ARGUMENTS_MSG = 'Very invalid arguments over there\n'
+
+    API_BASE = 'https://api.thousandeyes.com/v7'
+    REPORT_API_BASE = 'https://api.thousandeyes.com/v7/reports'
+
+    def __init__(self):
+        super().__init__()
+
+        self.arg_parser = ArgParser()
+
+        self.session = requests.Session()
+        self.session.auth = (self.arg_parser.username, self.arg_parser.token)
+        self.session.params = {'format': 'json'}
+
+        print('Welcome to Report Cli ;) Let me check your credentials first\n')
+        self.check()
+
+    def check(self):
+        r = self.session.get(F'{self.REPORT_API_BASE}')
+        if not r.ok:
+            print('You are not authorised with the credential you gave me >( Identify yourself!')
+            exit(2)
+
+    def do_exit(self, arg):
+        """
+        Exit the CLI
+        Usage: exit
+        """
+        print('Bye ;)')
+        return True
+
+    def do_get_report(self, arg):
+        """
+        Get raw report with ID and save it to a file
+        Usage: get ID DESTINATION_FILE
+        """
+        args = parse_arg(arg)
+        if len(args) is not 2:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        print('Getting your report')
+        report = self.get_report(args[0])
+        if json is None:
+            return False
+
+        with open(args[1], 'w') as f:
+            f.write(json.dumps(report, indent=4))
+            print('Your report is saved!\n')
+        return False
+
+    def do_get_template(self, arg):
+        """
+        Get report with filters cleared and save the template to a file
+        Usage: get_template ID DESTINATION_FILE
+        """
+        args = parse_arg(arg)
+        if len(args) is not 2:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        print('Getting your template report')
+        report = self.get_report(args[0])
+        if report is None:
+            return False
+
+        with open(args[1], 'w') as f:
+            f.write(json.dumps(ReportParser().get_template_report(report), indent=4))
+            print('Your template report is saved!\n')
+        return False
+
+    def do_get_endpoint_data(self, arg):
+        """
+        Get all the Endpoint Agents in a json format and store the list into a file.
+        This is useful if you want to update the filter values. Call this to get the required new filter values
+        (e.g. Endpoint Agent ID, Endpoint Agent label group id)
+        Usage: get_endpoint_data DATA_TYPE DESTINATION_FILE
+
+        DATA_TYPE list:
+        EA  -- Endpoint Agents
+        EAL -- Endpoint Agent Labels
+        PN  -- Private Network
+
+        Sadly location is not yet supported :(
+        """
+        args = parse_arg(arg)
+        if len(args) is not 2:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        data_type_to_api_url_map = {
+            'ea': F'{self.API_BASE}/endpoint-agents.json',
+            'eal': F'{self.API_BASE}/groups/endpoint-agents.json',
+            'pn': F'{self.API_BASE}/endpoint-data/networks.json'
+        }
+
+        data_type_code, destination_file_name = args
+        if data_type_code.lower() not in data_type_to_api_url_map:
+            print(F'Unsupported data type code {data_type_code}')
+
+        api_url = data_type_to_api_url_map[data_type_code]
+        r = self.session.get(api_url)
+        if not r.ok or r is None or r.text is None:
+            print(F'Error :(\n')
+            return False
+
+        with open(destination_file_name, 'w') as f:
+            f.write(json.dumps(json.loads(r.text), indent=4))
+            print('All saved in the file!\n')
+        return False
+
+    def do_add_filter(self, arg):
+        """
+        Add a new filter to all the widgets
+        Usage: add_filter ID FILTER_NAME FILTER_VALUES_FILE
+
+        FILTER_NAME list:
+        EA  -- Endpoint Agents
+        EAL -- Endpoint Agent Labels
+        LOC -- Location
+        PN  -- Private Network
+        NET -- Network
+        MN  -- Monitored Network
+
+        Note: when changing filter of Endpoint Agents use agent ID!!
+        """
+        args = parse_arg(arg)
+        if len(args) is not 3:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        return self.update_report_filter(args, ReportParser().add_filter_value)
+
+    def do_change_filter_value(self, arg):
+        """
+        Change the filter's value in the report, the new filter values is specified in a file where the values are
+        separated with a newline.
+        Usage: change_filter_value ID FILTER_NAME FILTER_VALUES_FILE
+
+
+        filter_name list:
+        EA  -- Endpoint Agents
+        EAL -- Endpoint Agent Labels
+        LOC -- Location
+        PN  -- Private Network
+        NET -- Network
+        MN  -- Monitored Network
+
+        Note: when changing filter of Endpoint Agents use agent ID!!
+        """
+        args = parse_arg(arg)
+        if len(args) is not 3:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        return self.update_report_filter(args, ReportParser().change_filter_value)
+
+    def do_export_to_acc_group(self, arg):
+        """
+        Export report from one account group to another account group
+        Usage: export_to_acc_group SOURCE_REPORT_ID DESTINATION_ACC_GROUP_ID [USERNAME AUTH_TOKEN]
+
+        Note: USERNAME and AUTH_TOKEN are optional if your current account is in the destination account group too
+        """
+        args = parse_arg(arg)
+        print(len(args))
+        if len(args) is not 2 and len(args) is not 4:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        report_id, acc_group_id = args[:2]
+
+        report = self.get_report(report_id)
+        if report is None:
+            return False
+
+        auth = self.session.auth if len(args) is 2 else (args[2], args[3])
+        r = requests.post(F'{self.REPORT_API_BASE}/create', params={'aid': acc_group_id}, auth=auth, json=report)
+
+        if r.status_code is 401:
+            print('You are not authorised, check your credential for the destination account group.\n')
+        elif r is None or r.text is None:
+            print('Something went wrong :/\n')
+        else:
+            print(F'Your report is successfully exported to account group {acc_group_id}!\n')
+
+        return False
+
+    def get_report(self, report_id: str):
+        r = self.session.get(F'{self.REPORT_API_BASE}/{report_id}')
+        if not r.ok or r is None or r.text is None:
+            print(F'Report with id {report_id} does not exist\n')
+            return None
+        else:
+            return json.loads(r.text)
+
+    def update_report_filter(self, args: list, report_parser_func: Callable[[dict, str, list], dict]) -> bool:
+        report_id, filter_code, file_name = args
+
+        raw_report = self.get_report(report_id)
+        if raw_report is None:
+            return False
+
+        with open(file_name, 'r') as f:
+            values = list(map(lambda x: x.strip(), f.read().splitlines()))
+
+        new_report = report_parser_func(raw_report, filter_code.lower(), values)
+        with open('lmao.json', 'w') as f:
+            f.write(json.dumps(new_report, indent=4))
+        # self.session.post(F'{self.REPORT_API_BASE}/{report_id}/update', json=new_report)
+        print('Done!\n')
+        return False
+
+
+def parse_arg(arg):
+    return arg.split()
+
+
+if __name__ == '__main__':
+    ReportCli().cmdloop()
