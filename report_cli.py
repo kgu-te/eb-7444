@@ -232,7 +232,29 @@ class ReportCli(Cmd):
             print(F'Error :(\n')
             return False
 
+        json.loads(r.txt)
+
         with open(destination_file_name, 'w') as f:
+            f.write(json.dumps(json.loads(r.text), indent=4))
+            print('All saved in the file!\n')
+        return False
+
+    def do_find_endpoint_agent(self, arg):
+        """
+        Find endpoint agent by keyword and store the result in destination file
+        Usage: find_endpoint_agent DESTINATION_FILE SEARCH_KEYWORD [SEARCH_KEYWORD ...]
+        """
+        args = parse_arg(arg)
+        if len(args) < 2:
+            print(self.INVALID_ARGUMENTS_MSG)
+            return False
+
+        r = self.session.get(F'{self.API_BASE}/endpoint-agents.json')
+        if not r.ok or r is None or r.text is None:
+            print(F'Error :(\n')
+            return False
+
+        with open(args[0], 'w') as f:
             f.write(json.dumps(json.loads(r.text), indent=4))
             print('All saved in the file!\n')
         return False
@@ -356,6 +378,11 @@ class ReportCli(Cmd):
         report = self.get_report(report_id)
         if report is None:
             return False
+
+        positive_answer = {'yes', 'Yes', 'YES', 'ye', 'Ye', 'Y', 'y', 'yep', 'Yep', 'Yarp', 'yarp'}
+        if input('Would you like to rename your export report? [y/n]\n') in positive_answer:
+            new_name = input('Please give me the new name you want for the report.\n')
+            report['title'] = new_name
 
         r = requests.post(F'{self.REPORT_API_BASE}/create', params={'aid': dest_acc_group_id}, auth=auth, json=report)
 
