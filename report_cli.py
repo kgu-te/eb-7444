@@ -239,10 +239,10 @@ class ReportCli(Cmd):
             print('All saved in the file!\n')
         return False
 
-    def do_find_endpoint_agent(self, arg):
+    def do_find_endpoint_agent_by_name(self, arg):
         """
         Find endpoint agent by keyword and store the result in destination file
-        Usage: find_endpoint_agent DESTINATION_FILE SEARCH_KEYWORD [SEARCH_KEYWORD ...]
+        Usage: find_endpoint_agent_by_name DESTINATION_FILE SEARCH_KEYWORD [SEARCH_KEYWORD ...]
         """
         args = parse_arg(arg)
         if len(args) < 2:
@@ -254,8 +254,19 @@ class ReportCli(Cmd):
             print(F'Error :(\n')
             return False
 
+        agents_list = json.loads(r.text)['endpointAgents']
+        keywords = args[1:]
+        search_field = {'agentName', 'computerName'}
+        result_list = []
+        for agent in agents_list:
+            for field in search_field:
+                if field in agent and any(x in agent[field] for x in keywords):
+                    result_list.append(agent)
+
         with open(args[0], 'w') as f:
-            f.write(json.dumps(json.loads(r.text), indent=4))
+            for r in result_list:
+                f.write(json.dumps(r, indent=4))
+                f.write('\n')
             print('All saved in the file!\n')
         return False
 
